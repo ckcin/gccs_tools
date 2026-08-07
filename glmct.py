@@ -7,20 +7,15 @@ powered by xarray (META-PAVE engine), outputting to a Landscape Word Doc with 1x
 """
 import base_utils
 import aws_utils
+import meta_utils
 import json
 import sys
 import argparse
-import tempfile
 import os
 import csv
+import difflib
+import tempfile
 from datetime import datetime, timezone
-
-try:
-    import numpy as np
-    import xarray as xr
-    HAS_XARRAY = True
-except ImportError:
-    HAS_XARRAY = False
 
 try:
     import s3fs
@@ -30,15 +25,16 @@ except ImportError:
 
 try:
     import docx
-    from docx.shared import Inches
+    from docx.shared import Inches, Pt
     from docx.enum.section import WD_ORIENT
     HAS_DOCX = True
 except ImportError:
     HAS_DOCX = False
 
 try:
+    import numpy as np
     import matplotlib
-    matplotlib.use('Agg') # Use headless backend so it doesn't pop up windows
+    matplotlib.use('Agg') # Headless plotting
     import matplotlib.pyplot as plt
     HAS_MPL = True
 except ImportError:
@@ -53,42 +49,53 @@ except ImportError:
 
 
 # =============================================================================
-# META-PAVE CONFIGURATION
+# PLOTTING & DOCX UTILITIES
 # =============================================================================
-CRITICAL_KEYS = [
-    "_FillValue",
-    "valid_range",
-    "valid_min",
-    "valid_max",
-    "scale_factor",
-    "add_offset"
-]
-NUMERIC_TOLERANCE = 1e-6
+def generate_diff_plot(var_name, v1_data, v2_data, name1, name2):
+    """Generates a graphical plot of the numeric differences between two arrays."""
+    if not HAS_MPL: return None
+    try:
+        v1_flat = np.asanyarray(v1_data).flatten()
+        v2_flat = np.asanyarray(v2_data).flatten()
 
-IGNORE_STRINGS = [
-    "date_created",
-    "id",
-    "production_site",
-    "production_cluster",
-    "dataset_name",
-    "timeline_id"
-]
+        if v1_flat.size != v2_flat.size:
+            return None
 
-WARN_STRINGS = [
-    "data_name",
-    "title",
-    "summary"
-]
+        diff = v1_flat - v2_flat
+        valid_mask = ~(np.isnan(diff) | np.isinf(diff))
+        diff = diff[valid_mask]
 
-KNOWN_STRINGS = [
-    "algorithm_dynamic_input_data_container"
-]
+        if len(diff) == 0 or np.all(diff == 0):
+            return None
+
+        plt.figure(figsize=(6.5, 3.5))
+
+        if len(diff) > 5000:
+            plt.hist(diff, bins=50, color='tab:red', alpha=0.7)
+            plt.title(f"{var_name} Difference Distribution")
+            plt.xlabel(f"Difference ({name1} - {name2})")
+            plt.ylabel("Frequency")
+        else:
+            plt.plot(diff, marker='o', markersize=3, linestyle='none', color='tab:red', alpha=0.6)
+            plt.title(f"{var_name} Mismatched Values")
+            plt.xlabel("Index")
+            plt.ylabel(f"Difference ({name1} - {name2})")
+            plt.axhline(0, color='black', linewidth=0.8, linestyle='--')
+
+        plt.tight_layout()
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".png")
+        os.close(tmp_fd)
+        plt.savefig(tmp_path, dpi=150)
+        plt.close()
+        return tmp_path
+    except Exception as e:
+        print(f"Warning: Failed to generate diff plot: {e}")
+        return None
 
 def generate_spatial_plot(entity_name, lat1, lon1, lat2, lon2, name1, name2):
     """Generates a 1x3 spatial subplot mapping Source 1, Differences, and Source 2."""
     if not HAS_MPL: return None
     try:
-        # Mask out NaNs/Fill Values
         mask1 = ~(np.isnan(lat1) | np.isnan(lon1))
         lat1, lon1 = lat1[mask1], lon1[mask1]
 
@@ -100,7 +107,6 @@ def generate_spatial_plot(entity_name, lat1, lon1, lat2, lon2, name1, name2):
 
         fig = plt.figure(figsize=(12, 4))
 
-        # Calculate a common bounding box for all 3 subplots
         all_lats = np.concatenate([lat1, lat2])
         all_lons = np.concatenate([lon1, lon2])
         if len(all_lats) > 0:
@@ -110,21 +116,18 @@ def generate_spatial_plot(entity_name, lat1, lon1, lat2, lon2, name1, name2):
             min_lat, max_lat, min_lon, max_lon = -90, 90, -180, 180
 
         extent = [min_lon, max_lon, min_lat, max_lat]
-
         axes = []
-        # Setup Map Projections and Features if Cartopy is available
+
         if HAS_CARTOPY:
             for i in range(1, 4):
                 ax = fig.add_subplot(1, 3, i, projection=ccrs.PlateCarree())
                 ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
                 ax.add_feature(cfeature.BORDERS, linewidth=0.5, linestyle=':')
                 ax.add_feature(cfeature.STATES, linewidth=0.3, linestyle=':')
-
                 gl = ax.gridlines(draw_labels=True, linestyle='--', alpha=0.5)
                 gl.top_labels = False
                 gl.right_labels = False
-                if i > 1:
-                    gl.left_labels = False # Cleaner look for side-by-side maps
+                if i > 1: gl.left_labels = False
                 ax.set_extent(extent, crs=ccrs.PlateCarree())
                 axes.append(ax)
             scatter_kwargs = {'transform': ccrs.PlateCarree()}
@@ -134,18 +137,17 @@ def generate_spatial_plot(entity_name, lat1, lon1, lat2, lon2, name1, name2):
                 ax.grid(True, linestyle='--', alpha=0.5)
                 ax.set_xlim([min_lon, max_lon])
                 ax.set_ylim([min_lat, max_lat])
-                if i == 1:
-                    ax.set_ylabel("Latitude")
+                if i == 1: ax.set_ylabel("Latitude")
                 ax.set_xlabel("Longitude")
                 axes.append(ax)
             scatter_kwargs = {}
 
-        # Plot 1 (Left): Source 1
+        # Left
         axes[0].set_title(f"{name1}")
         if len(lat1) > 0:
             axes[0].scatter(lon1, lat1, color='tab:blue', s=4, alpha=0.6, marker='o', **scatter_kwargs)
 
-        # Plot 2 (Center): Overlay / Differences
+        # Center
         axes[1].set_title("Overlay / Differences")
         if len(lat1) > 0:
             axes[1].scatter(lon1, lat1, color='tab:blue', s=4, alpha=0.6, marker='o', label=name1, **scatter_kwargs)
@@ -153,13 +155,12 @@ def generate_spatial_plot(entity_name, lat1, lon1, lat2, lon2, name1, name2):
             axes[1].scatter(lon2, lat2, color='tab:red', s=4, alpha=0.6, marker='x', label=name2, **scatter_kwargs)
         axes[1].legend(loc="upper right", fontsize='small')
 
-        # Plot 3 (Right): Source 2
+        # Right
         axes[2].set_title(f"{name2}")
         if len(lat2) > 0:
             axes[2].scatter(lon2, lat2, color='tab:red', s=4, alpha=0.6, marker='x', **scatter_kwargs)
 
         fig.suptitle(f"{entity_name.capitalize()}s Spatial Distribution", fontsize=14, y=1.05)
-
         plt.tight_layout()
 
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".png")
@@ -171,203 +172,36 @@ def generate_spatial_plot(entity_name, lat1, lon1, lat2, lon2, name1, name2):
         print(f"Warning: Failed to generate spatial plot: {e}")
         return None
 
-class MetadataAuditor:
-    """Smart metadata comparison engine adapted from META-PAVE."""
+def add_diff_runs_to_cells(cell1, cell2, text1, text2, font_size=None):
+    """Highlights differences between text1 and text2 by bolding them in docx cells."""
+    text1, text2 = str(text1), str(text2)
 
-    def determine_status(self, identity):
-        """Tiered severity logic for mismatches."""
-        if any(s in identity for s in IGNORE_STRINGS): return "IGNORE"
-        if any(s in identity for s in KNOWN_STRINGS): return "KNOWN"
-        if any(s in identity for s in WARN_STRINGS): return "WARNING"
-        return "ERROR"
+    p1 = cell1.paragraphs[0]
+    p1.text = ""
+    p2 = cell2.paragraphs[0]
+    p2.text = ""
 
-    def values_match(self, key, p, g):
-        """Handles exact vs fuzzy matching based on key importance."""
-        if p is g: return True
-        if p is None or g is None: return False
+    matcher = difflib.SequenceMatcher(None, text1, text2)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        r1, r2 = None, None
+        if tag == 'equal':
+            r1 = p1.add_run(text1[i1:i2])
+            r2 = p2.add_run(text2[j1:j2])
+        elif tag == 'replace':
+            r1 = p1.add_run(text1[i1:i2])
+            r1.bold = True
+            r2 = p2.add_run(text2[j1:j2])
+            r2.bold = True
+        elif tag == 'delete':
+            r1 = p1.add_run(text1[i1:i2])
+            r1.bold = True
+        elif tag == 'insert':
+            r2 = p2.add_run(text2[j1:j2])
+            r2.bold = True
 
-        if isinstance(p, (np.ndarray, list, float, int, np.number)):
-            p_arr = np.asanyarray(p)
-            g_arr = np.asanyarray(g)
-
-            if p_arr.shape != g_arr.shape:
-                return False
-
-            is_critical = any(ck in key for ck in CRITICAL_KEYS)
-            if is_critical:
-                return np.array_equal(p_arr, g_arr, equal_nan=True)
-            else:
-                return np.allclose(p_arr, g_arr, atol=NUMERIC_TOLERANCE, equal_nan=True)
-
-        return str(p).strip() == str(g).strip()
-
-    def compare_attributes(self, group_name, p_dict, g_dict):
-        """Compares attribute sets and identifies tiered issues."""
-        issues = []
-        all_keys = set(p_dict.keys()) | set(g_dict.keys())
-
-        for key in sorted(all_keys):
-            p_val = p_dict.get(key)
-            g_val = g_dict.get(key)
-
-            if not self.values_match(key, p_val, g_val):
-                identity = f"{group_name}:{key}"
-                status = self.determine_status(identity)
-
-                issues.append({
-                    "Attribute": identity,
-                    "Status": status,
-                    "Source1": str(p_val),
-                    "Source2": str(g_val)
-                })
-        return issues
-
-    def _audit_glm_lcfa(self, ds_p, ds_g, name1, name2):
-        """Performs GLM LCFA specific validation (events, groups, flashes, and spatial layout)."""
-        issues = []
-        glm_dims = ['number_of_events', 'number_of_groups', 'number_of_flashes']
-
-        if not any(d in ds_p.sizes for d in glm_dims) and not any(d in ds_g.sizes for d in glm_dims):
-            return issues
-
-        # Dimensional Verification
-        for dim in glm_dims:
-            c1 = ds_p.sizes.get(dim, 0)
-            c2 = ds_g.sizes.get(dim, 0)
-            if c1 != c2:
-                diff = c2 - c1
-                issues.append({
-                    "Attribute": f"GLM_Count:{dim}",
-                    "Status": "WARNING",
-                    "Source1": str(c1),
-                    "Source2": f"{c2} ({'+' if diff > 0 else ''}{diff})"
-                })
-
-        # ID Verification (Missing vs False Extraneous)
-        id_vars = {'number_of_events': 'event_id', 'number_of_groups': 'group_id', 'number_of_flashes': 'flash_id'}
-        for dim, var_name in id_vars.items():
-            if var_name in ds_p.variables and var_name in ds_g.variables:
-                ids1 = set(ds_p[var_name].values)
-                ids2 = set(ds_g[var_name].values)
-
-                missing = len(ids1 - ids2)
-                false_extra = len(ids2 - ids1)
-
-                if missing > 0 or false_extra > 0:
-                    entity_name = var_name.split('_')[0].capitalize()
-                    issues.append({
-                        "Attribute": f"GLM_Validation:{entity_name}s",
-                        "Status": "ERROR",
-                        "Source1": f"{missing} missing in Source 2",
-                        "Source2": f"{false_extra} extra ('false') in Source 2"
-                    })
-
-        # Spatial Representations (1x3 Plots)
-        types = ['event', 'group', 'flash']
-        for t in types:
-            lat_var = f"{t}_lat"
-            lon_var = f"{t}_lon"
-            if lat_var in ds_p.variables and lon_var in ds_p.variables and lat_var in ds_g.variables and lon_var in ds_g.variables:
-                lat1, lon1 = ds_p[lat_var].values, ds_p[lon_var].values
-                lat2, lon2 = ds_g[lat_var].values, ds_g[lon_var].values
-                plot_path = generate_spatial_plot(t, lat1, lon1, lat2, lon2, name1, name2)
-                if plot_path:
-                    issues.append({
-                        "Attribute": f"GLM_Spatial:{t.capitalize()}s",
-                        "Status": "PLOT",
-                        "Source1": "See spatial overlay plot",
-                        "Source2": "See spatial overlay plot",
-                        "Plot": plot_path
-                    })
-
-        return issues
-
-    def audit_file_pair(self, uri1, uri2, fs, name1="Source 1", name2="Source 2"):
-        """Full inventory audit directly from S3 using s3fs streaming."""
-        if not HAS_XARRAY or not HAS_S3FS:
-            return [{"Attribute": "DEPENDENCY", "Status": "ERROR", "Source1": "Missing dependencies", "Source2": "Run 'pip install xarray numpy s3fs h5netcdf'"}]
-
-        file_issues = []
-        try:
-            with fs.open(uri1, 'rb') as f1, fs.open(uri2, 'rb') as f2:
-                with xr.open_dataset(f1, engine='h5netcdf', cache=False) as ds_p, \
-                     xr.open_dataset(f2, engine='h5netcdf', cache=False) as ds_g:
-
-                    p_dims = {k: v for k, v in ds_p.sizes.items()}
-                    g_dims = {k: v for k, v in ds_g.sizes.items()}
-                    file_issues.extend(self.compare_attributes("Dimensions", p_dims, g_dims))
-
-                    file_issues.extend(self.compare_attributes("Global", ds_p.attrs, ds_g.attrs))
-
-                    common_vars = set(ds_p.variables.keys()) & set(ds_g.variables.keys())
-                    for var in sorted(common_vars):
-                        file_issues.extend(self.compare_attributes(
-                            f"Variable:{var}",
-                            ds_p.variables[var].attrs,
-                            ds_g.variables[var].attrs
-                        ))
-
-                    vars_only_in_1 = set(ds_p.variables.keys()) - set(ds_g.variables.keys())
-                    vars_only_in_2 = set(ds_g.variables.keys()) - set(ds_p.variables.keys())
-                    for v in vars_only_in_1:
-                        file_issues.append({"Attribute": f"Variable:{v}", "Status": "ERROR", "Source1": "Present", "Source2": "Missing"})
-                    for v in vars_only_in_2:
-                        file_issues.append({"Attribute": f"Variable:{v}", "Status": "ERROR", "Source1": "Missing", "Source2": "Present"})
-
-                    for var in sorted(common_vars):
-                        try:
-                            v1_data = ds_p[var].values
-                            v2_data = ds_g[var].values
-
-                            if v1_data.shape != v2_data.shape:
-                                file_issues.append({
-                                    "Attribute": f"DataPayload:{var}",
-                                    "Status": "ERROR",
-                                    "Source1": f"Shape {v1_data.shape}",
-                                    "Source2": f"Shape {v2_data.shape}"
-                                })
-                                continue
-
-                            if np.issubdtype(v1_data.dtype, np.number):
-                                match = np.allclose(v1_data, v2_data, atol=NUMERIC_TOLERANCE, equal_nan=True)
-                            else:
-                                match = np.array_equal(v1_data, v2_data)
-
-                            if not match:
-                                if np.issubdtype(v1_data.dtype, np.number):
-                                    diff_count = np.sum(~np.isclose(v1_data, v2_data, atol=NUMERIC_TOLERANCE, equal_nan=True))
-                                    valid_mask = ~(np.isnan(v1_data) | np.isnan(v2_data))
-                                    if np.any(valid_mask):
-                                        max_diff = np.max(np.abs(v1_data[valid_mask] - v2_data[valid_mask]))
-                                        msg_s2 = f"Max Diff: {max_diff:.4e}"
-                                    else:
-                                        msg_s2 = "NaN mismatches"
-                                    msg_s1 = f"{diff_count}/{v1_data.size} elements differ"
-                                else:
-                                    diff_count = np.sum(v1_data != v2_data)
-                                    msg_s1 = f"{diff_count}/{v1_data.size} elements differ"
-                                    msg_s2 = "Non-numeric mismatch"
-
-                                file_issues.append({
-                                    "Attribute": f"DataPayload:{var}",
-                                    "Status": "ERROR",
-                                    "Source1": msg_s1,
-                                    "Source2": msg_s2
-                                })
-                        except Exception as e:
-                            file_issues.append({
-                                "Attribute": f"DataPayload:{var}",
-                                "Status": "ERROR",
-                                "Source1": "Read/Compute Error",
-                                "Source2": str(e)
-                            })
-
-                    file_issues.extend(self._audit_glm_lcfa(ds_p, ds_g, name1, name2))
-
-        except Exception as e:
-            return [{"Attribute": "FILE_READ", "Status": "ERROR", "Source1": str(e), "Source2": "N/A"}]
-
-        return file_issues
+        if font_size:
+            if r1: r1.font.size = font_size
+            if r2: r2.font.size = font_size
 
 
 # =============================================================================
@@ -423,7 +257,7 @@ def compare_datasets(s3_client, ds1_cfg, ds2_cfg, target_date, raw_date_str, ext
     meta_diffs = {}
     all_raw_issues = {} # Store for Word Doc Generation
 
-    auditor = MetadataAuditor()
+    auditor = meta_utils.MetadataAuditor()
 
     csv_report_file = f"reports/glm_comparison_report_{raw_date_str}.csv"
     doc_report_file = f"reports/glm_comparison_report_{raw_date_str}.docx"
@@ -465,7 +299,12 @@ def compare_datasets(s3_client, ds1_cfg, ds2_cfg, target_date, raw_date_str, ext
                 uri2 = f"s3://{b2}/{file2['full_key']}"
 
                 try:
-                    raw_issues = auditor.audit_file_pair(uri1, uri2, fs, name1, name2)
+                    # Pass the plotting functions into the auditor as callbacks!
+                    raw_issues = auditor.audit_file_pair(
+                        uri1, uri2, fs, name1, name2,
+                        diff_plot_cb=generate_diff_plot,
+                        spatial_plot_cb=generate_spatial_plot
+                    )
                     all_raw_issues[key] = raw_issues
 
                     filtered_diffs = []
