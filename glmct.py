@@ -425,8 +425,8 @@ def compare_datasets(s3_client, ds1_cfg, ds2_cfg, target_date, raw_date_str, ext
 
     auditor = MetadataAuditor()
 
-    csv_report_file = f"glm_comparison_report_{raw_date_str}.csv"
-    doc_report_file = f"glm_comparison_report_{raw_date_str}.docx"
+    csv_report_file = f"reports/glm_comparison_report_{raw_date_str}.csv"
+    doc_report_file = f"reports/glm_comparison_report_{raw_date_str}.docx"
 
     try:
         with open(csv_report_file, 'w', newline='') as f:
