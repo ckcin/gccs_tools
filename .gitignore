@@ -1,4 +1,5 @@
 .sso_cache.json
 config.json
 *.pyc
-reports/*
+*.csv
+*.docx
