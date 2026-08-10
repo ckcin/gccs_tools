@@ -1,7 +1,8 @@
 """
-A module dedicated to AWS connections and credential handling, along with S3 retrieval utilities.
+A module dedicated to AWS connections and credential handling, along with generic S3 retrieval utilities.
 
-Auhor: Nick Carrasoc <hector.n.carrasco@noaa.gov> (with help from Gemini)
+This module simplifies the process of authenticating via AWS IAM Identity Center (SSO)
+using the Device Code flow and provides helper functions to query S3 buckets.
 """
 import sys
 import os
@@ -10,17 +11,37 @@ import boto3
 import json
 import time
 import webbrowser
+from pathlib import Path
 
 # =============================================================================
 # AWS SSO Connector
 # =============================================================================
 class S3SSOConnector:
     """
-    A simple module to connect to AWS S3 using direct SSO OIDC authentication.
+    A helper class to connect to AWS S3 using direct SSO OIDC authentication.
+
     Automatically discovers and prompts for accounts and roles if needed,
-    reads them from config, and caches temporary credentials to prevent repeated logins.
+    reads them from a specified JSON configuration file, and caches temporary
+    credentials to prevent repeated browser logins.
+
+    Attributes:
+        config_path (str): The path to the configuration JSON file.
+        cache_file (str): The local hidden file used to cache the SSO credentials.
+        sso_start_url (str): The portal URL for your AWS IAM Identity Center.
+        sso_region (str): The AWS region where your Identity Center is hosted.
+        account_id (str, optional): The target AWS Account ID.
+        role_name (str, optional): The target IAM Role to assume.
+        s3_client (boto3.client): The authenticated boto3 S3 client instance.
     """
+
     def __init__(self, config_path="config.json"):
+        """
+        Initializes the S3SSOConnector, loads configuration, and authenticates.
+
+        Args:
+            config_path (str): Path to the JSON configuration file containing
+                               the 'connection' block. Defaults to 'config.json'.
+        """
         self.config_path = config_path
         self.cache_file = ".sso_cache.json"
 
@@ -47,6 +68,10 @@ class S3SSOConnector:
                 "role_name": "MyRole"           # (Optional) Auto-select this IAM Role
             }
         }
+
+        Raises:
+            SystemExit: If the file is not found, contains invalid JSON, or
+                        is missing required parameters.
         """
         try:
             with open(self.config_path, 'r') as f:
@@ -70,7 +95,16 @@ class S3SSOConnector:
             sys.exit(1)
 
     def _load_cached_credentials(self):
-        """Attempts to load and validate unexpired SSO credentials from cache."""
+        """
+        Attempts to load and validate unexpired SSO credentials from the local cache.
+
+        Validates that the cached token matches the configured account ID and role name
+        (if provided in the config) and ensures the token will not expire within the
+        next 5 minutes.
+
+        Returns:
+            dict or None: The cached credential payload if valid, otherwise None.
+        """
         if not os.path.exists(self.cache_file):
             return None
 
@@ -98,7 +132,15 @@ class S3SSOConnector:
         return None
 
     def _save_cached_credentials(self, creds, account_id, role_name):
-        """Saves temporary AWS credentials to a local hidden file."""
+        """
+        Saves temporary AWS credentials to a local hidden file for reuse.
+
+        Args:
+            creds (dict): The credential payload returned by AWS SSO containing
+                          access keys, session tokens, and expiration metadata.
+            account_id (str): The AWS Account ID the credentials belong to.
+            role_name (str): The IAM Role the credentials belong to.
+        """
         cache = {
             "account_id": account_id,
             "role_name": role_name,
@@ -115,8 +157,16 @@ class S3SSOConnector:
 
     def _initialize_session(self):
         """
-        Authenticates with AWS SSO, leverages cached credentials if valid,
-        otherwise prompts for authorization and establishes an S3 connection.
+        Authenticates with AWS SSO and establishes an S3 connection.
+
+        If valid cached credentials exist, they are utilized immediately.
+        Otherwise, it triggers an OIDC Device Code flow, opens the user's web
+        browser for authorization, discovers available accounts/roles, and
+        caches the resulting temporary credentials.
+
+        Raises:
+            SystemExit: If authentication times out or required accounts/roles
+                        cannot be found.
         """
         try:
             # --- 1. Check for valid cached credentials ---
@@ -285,7 +335,13 @@ class S3SSOConnector:
             sys.exit(1)
 
     def list_buckets(self):
-        """Lists all S3 buckets available to the assumed role."""
+        """
+        Lists all S3 buckets available to the currently assumed role.
+
+        Returns:
+            list: A list of string bucket names. Returns an empty list if
+                  permission is denied or an error occurs.
+        """
         try:
             response = self.s3_client.list_buckets()
             return [bucket['Name'] for bucket in response.get('Buckets', [])]
@@ -293,24 +349,62 @@ class S3SSOConnector:
             print(f"Failed to list buckets: {e}")
             return []
 
+
 # =============================================================================
 # S3 Retrieval Utilities
 # =============================================================================
 
-def normalize_goes_key(rel_key):
-    """Strips the GOES-R creation time (_c...) from the filename for comparison."""
-    if "_c" in rel_key and "_s" in rel_key and "_e" in rel_key:
-        last_c = rel_key.rfind("_c")
-        ext_idx = rel_key.find(".", last_c)
+def download_s3_byte_range(s3_client, bucket, key, offset, size, target_path):
+    """
+    Extracts a specific byte-range from an S3 object directly to a local file.
 
-        if ext_idx != -1:
-            return rel_key[:last_c] + rel_key[ext_idx:]
-        else:
-            return rel_key[:last_c]
-    return rel_key
+    This is highly useful for pulling individual files directly out of uncompressed
+    tarballs stored on S3 if you possess an index sidecar, saving massive
+    amounts of bandwidth.
 
-def get_s3_objects(s3_client, bucket_name, prefix='', ext_filter=None, time_filter=None, logger=None):
-    """Fetches all objects in an S3 bucket under a specific prefix."""
+    Args:
+        s3_client (boto3.client): Authenticated S3 client.
+        bucket (str): S3 Bucket Name.
+        key (str): S3 Object Key (e.g., the large tarball).
+        offset (int): The starting byte offset.
+        size (int): The number of bytes to read.
+        target_path (str or Path): Local filepath to save the extracted bytes.
+
+    Raises:
+        Exception: Passes through any Boto3 HTTP or S3 errors.
+    """
+    target = Path(target_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    resp = s3_client.get_object(
+        Bucket=bucket,
+        Key=key,
+        Range=f"bytes={offset}-{offset+size-1}"
+    )
+
+    with open(target, 'wb') as f:
+        f.write(resp['Body'].read())
+
+
+def get_s3_objects(s3_client, bucket_name, prefix='', ext_filter=None, logger=None):
+    """
+    Fetches and filters all objects in an S3 bucket under a specific prefix.
+
+    Paginates through the specified S3 bucket to retrieve all object keys.
+    It can optionally filter the results by file extension.
+
+    Args:
+        s3_client (boto3.client): An authenticated boto3 S3 client.
+        bucket_name (str): The name of the S3 bucket to scan.
+        prefix (str, optional): The S3 prefix (folder path) to limit the search. Defaults to ''.
+        ext_filter (str, optional): A file extension to filter by (e.g., '.nc'). Defaults to None.
+        logger (object, optional): A logging instance with `.info()` and `.error()`
+                                   methods to print status. Defaults to None.
+
+    Returns:
+        dict: A dictionary mapping the relative object keys to their raw metadata
+              (full key, Size, ETag). Returns None if an access error occurs.
+    """
     paginator = s3_client.get_paginator('list_objects_v2')
     pages = paginator.paginate(Bucket=bucket_name, Prefix=prefix)
 
@@ -326,16 +420,13 @@ def get_s3_objects(s3_client, bucket_name, prefix='', ext_filter=None, time_filt
 
                     if key.endswith('/'): continue
                     if ext_filter and not key.lower().endswith(ext_filter.lower()): continue
-                    if time_filter and f"_s{time_filter}" not in key: continue
 
                     rel_key = key[len(prefix):] if key.startswith(prefix) else key
                     rel_key = rel_key.lstrip('/')
 
                     if not rel_key: continue
 
-                    norm_key = normalize_goes_key(rel_key)
-
-                    objects[norm_key] = {
+                    objects[rel_key] = {
                         'full_key': key,
                         'Size': obj['Size'],
                         'ETag': obj['ETag'].strip('"')

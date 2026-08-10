@@ -7,6 +7,7 @@ powered by xarray (META-PAVE engine), outputting to a Landscape Word Doc with 1x
 """
 import base_utils
 import aws_utils
+import goes_aws
 import meta_utils
 import json
 import sys
@@ -239,8 +240,9 @@ def compare_datasets(s3_client, ds1_cfg, ds2_cfg, target_date, raw_date_str, ext
     b2 = ds2_cfg.get('bucket')
     p2 = resolve_placeholders(ds2_cfg.get('prefix', ''), target_date)
 
-    objs1 = aws_utils.get_s3_objects(s3_client, b1, p1, ext_filter, raw_date_str, logger)
-    objs2 = aws_utils.get_s3_objects(s3_client, b2, p2, ext_filter, raw_date_str, logger)
+    # Note: Utilizing goes_aws module for GOES-R specific retrieval logic
+    objs1 = goes_aws.get_goes_s3_objects(s3_client, b1, p1, ext_filter, raw_date_str, logger)
+    objs2 = goes_aws.get_goes_s3_objects(s3_client, b2, p2, ext_filter, raw_date_str, logger)
 
     if objs1 is None or objs2 is None:
         if logger: logger.error("Comparison aborted due to bucket access errors.")
@@ -259,8 +261,8 @@ def compare_datasets(s3_client, ds1_cfg, ds2_cfg, target_date, raw_date_str, ext
 
     auditor = meta_utils.MetadataAuditor()
 
-    csv_report_file = f"reports/glm_comparison_report_{raw_date_str}.csv"
-    doc_report_file = f"reports/glm_comparison_report_{raw_date_str}.docx"
+    csv_report_file = f"glm_comparison_report_{raw_date_str}.csv"
+    doc_report_file = f"glm_comparison_report_{raw_date_str}.docx"
 
     try:
         with open(csv_report_file, 'w', newline='') as f:
@@ -417,6 +419,8 @@ def compare_datasets(s3_client, ds1_cfg, ds2_cfg, target_date, raw_date_str, ext
 
 if __name__ == "__main__":
     logger = base_utils.Logger(level="INFO")
+    # Set up interrupt handler for clean exits
+    base_utils.setup_interrupt_handler(logger)
 
     parser = argparse.ArgumentParser(description="Compare imagery datasets with dynamic date placeholders.")
     parser.add_argument(
@@ -456,6 +460,7 @@ if __name__ == "__main__":
         logger.error("Configuration must contain 'dataset_1' and 'dataset_2' inside 'data_sources', both with a 'bucket' key.")
         sys.exit(1)
 
+    # Note: Utilizing aws_utils generic module for SSO initialization
     logger.info("Initializing SSO Connection...")
     s3_connector = aws_utils.S3SSOConnector(config_path=config_file)
 
