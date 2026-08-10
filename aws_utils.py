@@ -1,5 +1,7 @@
 """
 A module dedicated to AWS connections and credential handling, along with S3 retrieval utilities.
+
+Auhor: Nick Carrasoc <hector.n.carrasco@noaa.gov> (with help from Gemini)
 """
 import sys
 import os
@@ -33,7 +35,19 @@ class S3SSOConnector:
         self._initialize_session()
 
     def _load_config(self):
-        """Loads basic SSO parameters from the config file."""
+        """
+        Loads basic SSO parameters from the config file.
+
+        Expected JSON structure for the connection configuration:
+        {
+            "connection": {
+                "sso_start_url": "https://...", # (Required) URL for AWS IAM Identity Center
+                "sso_region": "us-east-1",      # (Required) AWS region for Identity Center
+                "account_id": "123...",         # (Optional) Auto-select this AWS Account ID
+                "role_name": "MyRole"           # (Optional) Auto-select this IAM Role
+            }
+        }
+        """
         try:
             with open(self.config_path, 'r') as f:
                 config = json.load(f)
