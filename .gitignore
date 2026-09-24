@@ -1,5 +1,4 @@
 .sso_cache.json
-config.json
 *.pyc
 *.csv
 *.docx
