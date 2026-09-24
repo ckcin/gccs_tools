@@ -1,0 +1,23 @@
+{
+    "connection": {
+        "sso_start_url": "https://d-90661fb7b9.awsapps.com/start/#/",
+        "sso_region": "us-east-1",
+        "account_id": "825768992747",
+        "account_name": "aws-noaa-nesdis-goes-geocloud-prod-5050",
+        "role_name": "GCCS_Mission_Partner"
+    },
+
+    "data_sources": {
+        "dataset_1": {
+            "name": "on-prem",
+            "bucket": "geoproducts-ops",
+            "prefix": "op/GOES-19/l2/GLM/<YEAR>/<mon>/<YYYYMMDD>"
+        },
+        "dataset_2": {
+            "name": "gccs",
+            "bucket": "gccs-products",
+            "prefix": "GCCS/op/GOES-19/L2/GLM/lcfa/<YEAR>/<DOY>"
+        },
+        "extension_filter": ".nc"
+    }
+}
