@@ -48,6 +48,9 @@ KNOWN_STRINGS = [
 class MetadataAuditor:
     """Smart metadata comparison engine adapted from META-PAVE."""
 
+    def __init__(self, tolerance=0.0001):
+        self.tolerance = tolerance
+
     def determine_status(self, identity):
         """Tiered severity logic for mismatches."""
         if any(s in identity for s in IGNORE_STRINGS): return "IGNORE"
