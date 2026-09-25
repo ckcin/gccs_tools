@@ -2,21 +2,21 @@
     "connection": {
         "sso_start_url": "https://d-90661fb7b9.awsapps.com/start/#/",
         "sso_region": "us-east-1",
-        "account_id": "825768992747",
-        "account_name": "aws-noaa-nesdis-goes-geocloud-prod-5050",
-        "role_name": "GCCS_Mission_Partner"
+        "account_id": "891377334952",
+        "account_name": "nesdis-gccs-prod-infra-5065-02",
+        "role_name": "GCCS_Developer"
     },
 
     "data_sources": {
         "dataset_1": {
             "name": "prd",
-            "bucket": "gccs-products",
-            "prefix": "GCCS/op/GOES-19/L1b/ABI/<PRODUCT>/<YEAR>/<DOY>"
+            "bucket": "gccs-e1-prd-infr-s3-ext-products-prd",
+            "prefix": "op/GOES-19/<LEVEL>/<INSTR>/<PRODUCT>/<YEAR>/<DOY>"
         },
         "dataset_2": {
             "name": "stg",
-            "bucket": "gccs-staging-products",
-            "prefix": "GCCS/op/GOES-19/L1b/ABI/<PRODUCT>/<YEAR>/<DOY>"
+            "bucket": "gccs-e1-prd-infr-s3-ext-products-stg",
+            "prefix": "op/GOES-19/<LEVEL>/<INSTR>/<PRODUCT>/<YEAR>/<DOY>"
         },
         "extension_filter": ".nc"
     }
