@@ -230,7 +230,11 @@ def main():
     data_sources = config.get("data_sources", {})
     dataset_1 = data_sources.get("dataset_1")
     dataset_2 = data_sources.get("dataset_2")
+
+    # Strictly enforce .nc filter to prevent xarray from choking on FITS files
     ext_filter = data_sources.get("extension_filter", ".nc")
+    if not ext_filter or ext_filter.strip() in ["", "*"]:
+        ext_filter = ".nc"
 
     if not dataset_1 or not dataset_2 or 'bucket' not in dataset_1 or 'bucket' not in dataset_2:
         logger.error("Configuration must contain 'dataset_1' and 'dataset_2' inside 'data_sources'.")
