@@ -32,35 +32,75 @@ def generate_diff_plot(var_name, v1_data, v2_data, name1, name2):
         if v1_arr.shape != v2_arr.shape:
             return None
 
-        # Only plot 2D variables (like ABI images)
-        if v1_arr.ndim != 2:
+        # Squeeze out singleton dimensions (e.g., (1, 1280, 1280) -> (1280, 1280))
+        # This is common for SUVI or variables that include a single time dimension.
+        v1_arr = np.squeeze(v1_arr)
+        v2_arr = np.squeeze(v2_arr)
+
+        slice_msg = ""
+        # Handle N-D variables (e.g., multiple bands, levels, or time steps)
+        # by recursively extracting the first index until we reach 2D.
+        if v1_arr.ndim > 2:
+            while v1_arr.ndim > 2:
+                v1_arr = v1_arr[0]
+                v2_arr = v2_arr[0]
+            slice_msg = " [N-D Variable: Showing 2D Slice]"
+
+        if v1_arr.ndim == 1:
+            # Safely handle massive 1D arrays to prevent Matplotlib from freezing
+            if v1_arr.size > 20000:
+                skip = max(1, v1_arr.size // 10000)
+                v1_arr = v1_arr[::skip]
+                v2_arr = v2_arr[::skip]
+                slice_msg += " [Subsampled]"
+
+            diff = v1_arr.astype(float) - v2_arr.astype(float)
+
+            fig, axes = plt.subplots(1, 2, figsize=(12, 3.5))
+
+            axes[0].plot(v1_arr, label=name1, color='tab:blue', alpha=0.7)
+            axes[0].plot(v2_arr, label=name2, color='tab:orange', linestyle='--', alpha=0.7)
+            axes[0].set_title("Value Overlay")
+            axes[0].legend(loc='best', fontsize='small')
+            axes[0].grid(True, linestyle=':', alpha=0.6)
+
+            axes[1].plot(diff, color='tab:red', alpha=0.8)
+            axes[1].set_title("Delta (Difference Locations)")
+            axes[1].grid(True, linestyle=':', alpha=0.6)
+
+            fig.suptitle(f"{var_name} Mismatch (1D View){slice_msg}", fontsize=12, y=1.05)
+
+        elif v1_arr.ndim == 2:
+            if v1_arr.shape[0] > 1500 or v1_arr.shape[1] > 1500:
+                skip_y = max(1, v1_arr.shape[0] // 1000)
+                skip_x = max(1, v1_arr.shape[1] // 1000)
+                v1_arr = v1_arr[::skip_y, ::skip_x]
+                v2_arr = v2_arr[::skip_y, ::skip_x]
+
+            diff = v1_arr.astype(float) - v2_arr.astype(float)
+
+            fig, axes = plt.subplots(1, 3, figsize=(12, 3.5))
+
+            im0 = axes[0].imshow(v1_arr, cmap='viridis', aspect='auto')
+            axes[0].set_title(f"{name1}")
+            fig.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
+
+            vmax = np.nanmax(np.abs(diff))
+            if vmax == 0 or np.isnan(vmax): vmax = 1
+            im1 = axes[1].imshow(diff, cmap='coolwarm', vmin=-vmax, vmax=vmax, aspect='auto')
+            axes[1].set_title("Delta (Difference Locations)")
+            fig.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
+
+            im2 = axes[2].imshow(v2_arr, cmap='viridis', aspect='auto')
+            axes[2].set_title(f"{name2}")
+            fig.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
+
+            fig.suptitle(f"{var_name} Mismatch (2D View){slice_msg}", fontsize=12, y=1.05)
+
+        else:
+            # 0-D arrays (scalars) are evaluated numerically but skipped for visual plotting
             return None
 
-        if v1_arr.shape[0] > 1500 or v1_arr.shape[1] > 1500:
-            skip_y = max(1, v1_arr.shape[0] // 1000)
-            skip_x = max(1, v1_arr.shape[1] // 1000)
-            v1_arr = v1_arr[::skip_y, ::skip_x]
-            v2_arr = v2_arr[::skip_y, ::skip_x]
-
-        diff = v1_arr.astype(float) - v2_arr.astype(float)
-
-        fig, axes = plt.subplots(1, 3, figsize=(12, 3.5))
-
-        im0 = axes[0].imshow(v1_arr, cmap='viridis', aspect='auto')
-        axes[0].set_title(f"{name1}")
-        fig.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
-
-        vmax = np.nanmax(np.abs(diff))
-        if vmax == 0 or np.isnan(vmax): vmax = 1
-        im1 = axes[1].imshow(diff, cmap='coolwarm', vmin=-vmax, vmax=vmax, aspect='auto')
-        axes[1].set_title("Delta (Difference Locations)")
-        fig.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
-
-        im2 = axes[2].imshow(v2_arr, cmap='viridis', aspect='auto')
-        axes[2].set_title(f"{name2}")
-        fig.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
-
-        fig.suptitle(f"{var_name} Mismatch (2D View)", fontsize=12, y=1.05)
         plt.tight_layout()
 
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".png")
