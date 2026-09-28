@@ -17,8 +17,9 @@ import plot_utils
 class DataAuditor:
     """Orchestrates file reading, metadata verification, and array comparison."""
 
-    def __init__(self, tolerance=0.0001):
+    def __init__(self, tolerance=0.0001, force_plots=False):
         self.tolerance = tolerance
+        self.force_plots = force_plots
         # Embed the metadata auditor for checking non-payload attributes
         self.meta_auditor = meta_utils.MetadataAuditor(tolerance=tolerance)
 
@@ -157,6 +158,19 @@ class DataAuditor:
                                     "Source2": msg_s2,
                                     "Plot": plot_path
                                 })
+                            else:
+                                # Force a QA Snapshot plot if the flag is passed, OR if it's a primary image variable
+                                # (Only do this for arrays that are 1D or greater to allow timeseries line plots)
+                                if (self.force_plots or var.upper() in ['RAD', 'CMI']) and getattr(v1_data, 'ndim', 0) >= 1:
+                                    plot_path = plot_utils.generate_diff_plot(var, v1_data, v2_data, name1, name2)
+                                    if plot_path:
+                                        file_issues.append({
+                                            "Attribute": f"DataPayload:{var}",
+                                            "Status": "PLOT",
+                                            "Source1": "Perfect Match (QA Snapshot)",
+                                            "Source2": "Perfect Match (QA Snapshot)",
+                                            "Plot": plot_path
+                                        })
                         except Exception as e:
                             file_issues.append({
                                 "Attribute": f"DataPayload:{var}",

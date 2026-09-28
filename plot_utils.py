@@ -9,7 +9,7 @@ import tempfile
 try:
     import numpy as np
     import matplotlib
-    matplotlib.use('Agg') # Headless plotting
+    matplotlib.use('Agg') # Headless plotting to prevent UI freezing
     import matplotlib.pyplot as plt
     HAS_MPL = True
 except ImportError:
@@ -22,13 +22,19 @@ try:
 except ImportError:
     HAS_CARTOPY = False
 
+
 def generate_diff_plot(var_name, v1_data, v2_data, name1, name2):
     """Generates a graphical plot of the numeric differences between two arrays."""
     if not HAS_MPL: return None
-    try:
-        v1_arr = np.asanyarray(v1_data)
-        v2_arr = np.asanyarray(v2_data)
 
+    try:
+        # Cast to float upfront to handle datetime64 and reject string/object arrays silently
+        v1_arr = np.asanyarray(v1_data).astype(float)
+        v2_arr = np.asanyarray(v2_data).astype(float)
+    except (ValueError, TypeError):
+        return None
+
+    try:
         if v1_arr.shape != v2_arr.shape:
             return None
 
@@ -38,6 +44,7 @@ def generate_diff_plot(var_name, v1_data, v2_data, name1, name2):
         v2_arr = np.squeeze(v2_arr)
 
         slice_msg = ""
+
         # Handle N-D variables (e.g., multiple bands, levels, or time steps)
         # by recursively extracting the first index until we reach 2D.
         if v1_arr.ndim > 2:
@@ -46,6 +53,7 @@ def generate_diff_plot(var_name, v1_data, v2_data, name1, name2):
                 v2_arr = v2_arr[0]
             slice_msg = " [N-D Variable: Showing 2D Slice]"
 
+        # --- 1D Array Plotting (Line Plots) ---
         if v1_arr.ndim == 1:
             # Safely handle massive 1D arrays to prevent Matplotlib from freezing
             if v1_arr.size > 20000:
@@ -54,7 +62,7 @@ def generate_diff_plot(var_name, v1_data, v2_data, name1, name2):
                 v2_arr = v2_arr[::skip]
                 slice_msg += " [Subsampled]"
 
-            diff = v1_arr.astype(float) - v2_arr.astype(float)
+            diff = v1_arr - v2_arr
 
             fig, axes = plt.subplots(1, 2, figsize=(12, 3.5))
 
@@ -70,14 +78,16 @@ def generate_diff_plot(var_name, v1_data, v2_data, name1, name2):
 
             fig.suptitle(f"{var_name} Mismatch (1D View){slice_msg}", fontsize=12, y=1.05)
 
+        # --- 2D Array Plotting (Image Plots) ---
         elif v1_arr.ndim == 2:
+            # Subsample massive 2D grids (like ABI Radiances)
             if v1_arr.shape[0] > 1500 or v1_arr.shape[1] > 1500:
                 skip_y = max(1, v1_arr.shape[0] // 1000)
                 skip_x = max(1, v1_arr.shape[1] // 1000)
                 v1_arr = v1_arr[::skip_y, ::skip_x]
                 v2_arr = v2_arr[::skip_y, ::skip_x]
 
-            diff = v1_arr.astype(float) - v2_arr.astype(float)
+            diff = v1_arr - v2_arr
 
             fig, axes = plt.subplots(1, 3, figsize=(12, 3.5))
 
@@ -128,6 +138,7 @@ def generate_spatial_plot(entity_name, lat1, lon1, lat2, lon2, name1, name2):
 
         fig = plt.figure(figsize=(12, 4))
 
+        # Calculate dynamic bounds
         all_lats = np.concatenate([lat1, lat2])
         all_lons = np.concatenate([lon1, lon2])
         if len(all_lats) > 0:

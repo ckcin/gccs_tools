@@ -196,11 +196,11 @@ def parse_args():
     parser.add_argument("--instr", type=str, default=None, help="Optional instrument identifier (e.g., ABI, GLM) for <INSTR> placeholder")
     parser.add_argument("--config", type=str, default="config.json", help="Path to config file (default: config.json)")
     parser.add_argument("--tolerance", type=float, default=0.0001, help="Numeric tolerance for array diffs (default: 0.0001)")
+    parser.add_argument("--force-plots", action="store_true", help="Force generation of QA visual plots for all 2D arrays even if perfectly matched")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
     parser.add_argument("-d", "--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("-q", "--quiet", action="store_true", help="Minimal logging")
     return parser.parse_args()
-
 
 def main():
     args = parse_args()
@@ -267,7 +267,7 @@ def main():
             client_kwargs={'region_name': s3_connector.s3_client.meta.region_name}
         )
 
-    auditor = data_utils.DataAuditor(tolerance=args.tolerance)
+    auditor = data_utils.DataAuditor(tolerance=args.tolerance, force_plots=args.force_plots)
     results = []
 
     print("\n" + "="*80)
