@@ -107,6 +107,15 @@ Usage Examples:
 python goes_compare.py "ABI-L1b-RadF" 2023015 --sat G16 --level L1b --tolerance 0.0001
 ```
 
+### 3. Storage Size Comparator: storage_savings.py
+A simple tool to pull and match given dates data between the source and test and reports storage savings
+
+Usage Example:
+```
+[bash]
+./storage_savings.py "*" --level L2 --instr ABI 2026271
+```
+
 *Dynamic Date Placeholders*
 The name and prefix fields in config.json support dynamic placeholders for both tools. When you run either tool and supply a date string, these tags are automatically replaced with the corresponding values for that specific date:
 - \<YEAR> or \<YYYY>: 4-digit year (e.g., 2023)
