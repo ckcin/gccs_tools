@@ -116,6 +116,7 @@ Usage Example:
 ./storage_savings.py "*" --level L2 --instr ABI 2026271
 ```
 
+### Usage details
 *Dynamic Date Placeholders*
 The name and prefix fields in config.json support dynamic placeholders for both tools. When you run either tool and supply a date string, these tags are automatically replaced with the corresponding values for that specific date:
 - \<YEAR> or \<YYYY>: 4-digit year (e.g., 2023)
