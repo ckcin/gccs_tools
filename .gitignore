@@ -3,3 +3,4 @@
 *.csv
 *.docx
 .DS_Store
+*.log
